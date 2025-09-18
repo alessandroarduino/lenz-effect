@@ -1,0 +1,543 @@
+#+PROPERTY: header-args:jupyter-python :session py
+#+PROPERTY: header-args:jupyter-python+ :async yes
+
+* Lenz effect on plates in the magnet room
+:PROPERTIES:
+:CUSTOM_ID: lenz-effect-on-plates-in-the-magnet-room
+:END:
+
+A nonferromagnetic conductive object in motion within a static magnetic field experiences the *Lenz effect*, namely the development of forces opposing its motion. This happens because of the Lorentz forces due to the eddy currents induced by the very same motion of the object within the magnetic field.
+Given an external force determining the body motion, it is possible to include the Lorentz forces in a dynamics model to predict the motion. This is done here for simple motions defined by a single degree of freedom (precisely, translation along a straight line and rotation around an axis).
+
+The functions defined in this notebook are collected in the file =lenz_effect.py= to be importable and usable in other contexts.
+
+** Import the packages
+:PROPERTIES:
+:CUSTOM_ID: import-the-packages
+:END:
+
+Import all the packages used in this notebook.
+
+#+begin_src jupyter-python :tangle lenz_effect.py
+  import matplotlib.pyplot as plt
+  import numpy as np
+  import os
+  import scipy.integrate
+  import seaborn as sns
+#+end_src
+
+#+RESULTS:
+
+** Define the function solving the dynamics equations
+:PROPERTIES:
+:CUSTOM_ID: define-the-function-solving-the-dynamics-equations
+:END:
+
+Let's assume the motion has only one degree of freedom, \(q\). It can be a linear displacement, in case of a translation, or an angle, in case of a rotation. In both cases, the dynamics is described by the ordinary differential equation
+\[I \ddot{q} = F_{\rm ext}(t, q) + f_{\rm lenz}(q) \dot{q}\]
+where \(I\) is the inertial coefficient, \(F_{\rm ext}(t, q)\) is a known forcing term, and \(f_{\rm lenz}(q)\) is the force (or torque in case of a rotation) that the object would experience if moving with a unitary velocity in \(q\).
+
+#+begin_src jupyter-python :tangle lenz_effect.py
+  def ComputeDynamics(Fext, flenz, t_max, dt, q0, q_min, q_max):
+      '''Solve the dynamics in a given time interval and spatial domain.
+
+      Parameters
+      ----------
+      Fext : callable ``Fext(t, q)``
+          Forcing term representing the external forces acting on the body
+          divided by the body inertia. Both `t` and `q` are scalars. `Fext`
+          should return a scalar.
+      flenz : callable ``flenz(q)``
+          Function representing the unitary Lenz effect divided by the body
+          inertia. `q` is a scalar. `flenz` should return a scalar.
+      t_max : float
+          Endpoint of the integration time interval.
+      dt : float
+          Time steps at which the output is stored.
+      q0 : float
+          Initial condition of `q`. The initial condition of its derivative is
+          always zero.
+      q_min : float
+          Minimum value that `q` can assume. The computation is interrupted if
+          a lower value is reached.
+      q_max : float
+          Maximum value that `q` can assume. The computation is interrupted if
+          a larger value is reached.
+
+      Returns
+      -------
+      tt : ndarray
+          Time points where the solution is stored. ``tt.shape == (n,)``, being
+          `n` the number of stored time points.
+      qq : ndarray
+          Solution values in each time point. ``qq.shape == (n,2)``, the first
+          column contains the actual solution, the second column its derivative.
+      '''
+      n_max = int(t_max/dt) + 2
+      tt = np.zeros((n_max,))
+      qq = np.zeros((n_max,2))
+
+      f = lambda t,q: [q[1], Fext(t,q[0]) + flenz(q[0])*q[1]]
+
+      ode = scipy.integrate.ode(f)
+      ode.set_integrator('vode', method='adams')
+      ode.set_initial_value([q0,0.0], 0)
+
+      n = 0
+      tt[n] = ode.t
+      qq[n,:] = ode.y
+      while ode.successful() and ode.t<t_max and ode.y[0]>q_min and ode.y[0]<q_max:
+          ode.integrate(ode.t + dt)
+          n += 1
+          tt[n] = ode.t
+          qq[n,:] = ode.y
+      tt = tt[:n+1]
+      qq = qq[:n+1,:]
+
+      return tt, qq
+#+end_src
+
+#+RESULTS:
+
+** Analytical solution for a circular plate rotating inside the bore
+:PROPERTIES:
+:CUSTOM_ID: analytical-solution-for-a-circular-plate-rotating-inside-the-bore
+:END:
+
+In the case of a circular plate rotating inside the bore, where the magnetic field is spatially uniform, the Lenz effect can be computed analytically. Let's consider the static field oriented horizontally along the \(z\)-axis. The \(y\)-axis is directed upward and the \(x\)-axis is such to fulfill the right-hand rule.
+Assuming that the plate starts perpendicular to the magnetic field and rotates around the \(x\)-axis, if the plate has radius \(R\), thickness \(d\), and electric conductivity \(\sigma\), then
+\[f_{\rm lenz}(\theta) = -d \frac{\sigma B_0^2 R^4 \pi}{8} \sin(\theta)^2\]
+being \(\theta\) the angle between the \(y\)-axis and the plate (the degree of freedom), and \(B_0\) the magnetic field intensity.
+
+#+begin_src jupyter-python
+  B0 = 1.5 # [T]
+  R = 150.0e-3 # [m]
+  d = 2.1e-3 # [m]
+
+  # properties of aluminum
+  sigma = 37.7e6 # [S/m]
+  rho = 2700.0 # [kg/m3]
+
+  # compute the inertia
+  m = d*R*R*np.pi*rho
+  inertia = 5/4*m*R*R
+
+  # analytical expression of the lenz effect
+  coeff = d*B0*B0*sigma*R*R*R*R*np.pi/8.0
+  flenz = lambda theta: -coeff*np.sin(theta)**2/inertia
+
+  # forcing term due to gravity
+  g = 9.81 # [m/s2]
+  Fext = lambda t,theta: m*g*R*np.sin(theta)/inertia
+  # initial condition
+  theta0 = np.deg2rad(3.0) # [rad]
+
+  # time step and domain boundaries
+  t_max = 360.0 # [s]
+  dt = 0.01 # [s]
+  theta_min = np.deg2rad(0.0) # [rad]
+  theta_max = np.deg2rad(90.0) # [rad]
+
+  # compute the dynamics with and without the magnetic field
+  tt_w,ttheta_w = ComputeDynamics(Fext, flenz, t_max, dt, theta0, theta_min,
+                                  theta_max)
+  tt_wo,ttheta_wo = ComputeDynamics(Fext, lambda y: 0, t_max, dt, theta0,
+                                    theta_min, theta_max)
+#+end_src
+
+#+RESULTS:
+
+*** Define the functions to plot and store the results
+:PROPERTIES:
+:CUSTOM_ID: define-the-functions-to-plot-and-store-the-results
+:END:
+
+Define a plotting function for this and future results.
+
+#+begin_src jupyter-python :tangle lenz_effect.py
+  def PlotResults(tt_w,qq_w, tt_wo,qq_wo, Fext, flenz, is_angle = False):
+      '''Plot the dynamics results.
+
+      Parameters
+      ----------
+      tt_w, tt_wo : ndarray
+          Time points where the solutions with (w) or without (wo) magnetic field
+          are stored. ``tt_w.shape == (n_w,)`` and ``tt_wo.shape == (n_wo,)``.
+      qq_w, qq_wo : ndarray
+          Solution values in each time point with (w) or without (wo) the magnetic
+          field. ``qq_w.shape == (n_w,2)`` and ``qq_wo.shape == (n_wo,2)``.
+      Fext : callable ``Fext(t, q)``
+          Forcing term representing the external forces acting on the body. Both
+          `t` and `q` are scalars. `Fext` should return a scalar.
+      flenz : callable ``flenz(q)``
+          Function representing the unitary Lenz effect. `q` is a scalar. `flenz`
+          should return a scalar.
+      is_angle : bool, optional
+          It is ``True`` if the solution is an angle, in radians. By default it is
+          ``False``.
+      '''
+      identity = lambda x: x
+      transform = np.rad2deg if is_angle else identity
+
+      fig,axes = plt.subplots(3,1, figsize=(3.5,7), sharex=True)
+      colors = sns.color_palette("Set2")
+
+      axes[0].semilogx(tt_w, transform(qq_w[:,0]), linewidth=2, color=colors[0])
+      axes[0].semilogx(tt_wo, transform(qq_wo[:,0]), linewidth=2, color=colors[1])
+      axes[0].set_ylabel("Angle (deg)" if is_angle else "Position (m)")
+      axes[0].grid()
+      axes[0].legend(("With magnet", "Without magnet"))
+
+      axes[1].loglog(tt_w, transform(qq_w[:,1]), linewidth=2, color=colors[0])
+      axes[1].loglog(tt_wo, transform(qq_wo[:,1]), linewidth=2, color=colors[1])
+      axes[1].set_ylabel("Angular velocity (deg/s)" if is_angle else "Velocity (m/s)")
+      axes[1].grid()
+      
+      FFext = np.array([Fext(t,q) for t,q in zip(tt_w,qq_w[:,0])])
+      FFlenz = np.array([flenz(q[0])*q[1] for q in qq_w])
+      axes[2].semilogx(tt_w, FFext, linewidth=2, color=colors[2])
+      axes[2].semilogx(tt_w, -FFlenz, linewidth=2, color=colors[3])
+      axes[2].set_xlabel("Time (s)")
+      axes[2].set_ylabel("Moment (Nm)" if is_angle else "Force (N)")
+      axes[2].grid()
+      axes[2].legend(("Forcing term", "Lenz effect"))
+
+      return fig
+#+end_src
+
+#+RESULTS:
+
+Define a function to save the results in a table.
+
+#+begin_src jupyter-python :tangle lenz_effect.py
+  def SaveResults(filename, tt,qq, Fext,flenz, is_angle):
+      identity = lambda x: x
+      transform = np.rad2deg if is_angle else identity
+
+      with open(filename, "w") as ofile:
+          ofile.write("time,dof,velocity,ext_force,lenz_force\n")
+          for idx in range(len(tt)):
+              ofile.write("{:12e},{:.12e},{:.12e},{:.12e},{:.12e}\n".format(
+                  tt[idx],transform(qq[idx,0]),transform(qq[idx,1]),
+                  Fext(tt[idx],qq[idx,0]),-flenz(qq[idx,0])*qq[idx,1]))
+
+      return
+#+end_src
+
+#+RESULTS:
+
+*** Plot and store the results for the rotating circular plate
+:PROPERTIES:
+:CUSTOM_ID: plot-and-store-the-results-for-the-rotating-circular-plate
+:END:
+
+Plot the results.
+
+#+begin_src jupyter-python
+    Fext_plot = lambda t,q: Fext(t,q)*inertia
+    flenz_plot = lambda q: flenz(q)*inertia
+
+    fig = PlotResults(tt_w,ttheta_w, tt_wo,ttheta_wo, Fext_plot, flenz_plot, True)
+
+    fig.suptitle("Circular plate rotating")
+    fig.tight_layout()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/9569bb83241f5d3bd3ea8a266552aa9beacb52f0.png]]
+
+Save the results in tables.
+
+#+begin_src jupyter-python
+  filename = os.path.join("results","rotation-circular-w.csv")
+  SaveResults(filename, tt_w,ttheta_w, Fext_plot,flenz_plot, True)
+
+  filename = os.path.join("results","rotation-circular-wo.csv")
+  SaveResults(filename, tt_wo,ttheta_wo, Fext_plot,flenz_plot, True)
+#+end_src
+
+#+RESULTS:
+
+** Numerical solutions for a squared plate
+:PROPERTIES:
+:CUSTOM_ID: numerical-solutions-for-a-squared-plate
+:END:
+
+In order to predict the motion of a squared plate in a static magnetic field with a realistic spatial distribution, numerical simulations come in handy to compute \(f_{\rm lenz}(q)\).
+Precisely, the interval of admissible values of the degree of freedom is discretized in small subintervals.
+The forces and the torques due to the Lenz effect when motion takes place with a unitary velocity are computed in each subinterval assuming that the variation of flux density is constant within each subinterval.
+The computed forces and torques are assigned to the center points of the subintervals and the forces and torques elsewhere are approximated by linear interpolation.
+
+In our case, the results of the numerical simulations have been collected in text files with data structured in four columns. The first column contains the values of the degree of freedom where the forces have been evaluated; the remaining columns contain the three components of the relevant force or torque applied to the plate.
+
+Let's define a function to define \(f_{\rm lenz}(q)\) loading the useful data from such a structured file.
+
+#+begin_src jupyter-python :tangle lenz_effect.py
+  def ReadLenzEffectFromFile(address, col=1):
+      '''Read the Lenz effect with unitary velocity from a text file.
+
+      Parameters
+      -----------
+      address : string
+          Address of the file to read.
+      col : int, optional
+          Index of the column containing the relevant component of the force
+          (or torque). By default it is 1.
+      
+      Notes
+      -----
+      The text file is structured in four columns. The first column contains
+      the values of the degree of freedom where the forces (or torques) are
+      evaluated. The remaining columns contain the components of the relevant
+      force or torque.
+      '''
+      data = np.genfromtxt(address)
+      xp = data[:,0]
+      fp = data[:,col]
+      flenz = lambda x: np.interp(x, xp, fp)
+      return flenz
+#+end_src
+
+#+RESULTS:
+
+In the following, we will consider a squared plate made of aluminum (6061T6), with sides of 295 mm (along \(y\)) and 295 mm (along \(x\)), and thickness of 2.1 mm.
+
+#+begin_src jupyter-python
+  # geometrical properties
+  d = 2.1e-3 # [m]
+  lx = 295e-3 # [m]
+  ly = 295e-3 # [m]
+
+  # physical properties
+  rho = 2700 # [kg/m3]
+#+end_src
+
+#+RESULTS:
+
+*** Squared plate rotating inside the bore
+:PROPERTIES:
+:CUSTOM_ID: squared-plate-rotating-inside-the-bore
+:END:
+
+Let's run the dynamics solver with the proper inertia and forcing term for a plate that is rotating around its edge under the effect of gravity.
+The plate is assumed parallel to the \(x\)-axis and the initial condition is a small angle with respect to the vertical \(y\)-axis of 3°.
+
+#+begin_src jupyter-python
+  # compute the inertia
+  m = d*lx*ly*rho
+  inertia = 1/3*m*ly*ly
+
+  # read the lenz effect from file
+  filename = os.path.join("em_simulations","plate_rotating.dat")
+  flenz_plot = ReadLenzEffectFromFile(filename, col=1)
+  flenz = lambda theta: flenz_plot(theta)/inertia
+
+  # forcing term due to gravity
+  g = 9.81 # [m/s2]
+  Fext = lambda t,theta: m*g*ly/2*np.sin(theta)/inertia
+
+  # initial condition
+  theta0 = np.deg2rad(3.0) # [rad]
+
+  # time step and domain boundaries
+  t_max = 360.0 # [s]
+  dt = 0.01 # [s]
+  theta_min = np.deg2rad(0.0) # [rad]
+  theta_max = np.deg2rad(90.0) # [rad]
+
+  # compute the dynamics with and without the magnetic field
+  tt_w,ttheta_w = ComputeDynamics(Fext, flenz, t_max, dt, theta0, theta_min,
+                                  theta_max)
+  tt_wo,ttheta_wo = ComputeDynamics(Fext, lambda y: 0, t_max, dt, theta0,
+                                    theta_min, theta_max)
+#+end_src
+
+#+RESULTS:
+
+Plot the results.
+
+#+begin_src jupyter-python
+  # plot the result
+  Fext_plot = lambda t,q: Fext(t,q)*inertia
+  fig = PlotResults(tt_w,ttheta_w, tt_wo,ttheta_wo, Fext_plot, flenz_plot, True)
+  fig.suptitle("Squared plate rotating")
+  fig.tight_layout()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/aa59b31b337e09cb4658f0009dce6c80bc0908b5.png]]
+
+Save the results in tables.
+
+#+begin_src jupyter-python
+  filename = os.path.join("results","rotation-squared-w.csv")
+  SaveResults(filename, tt_w,ttheta_w, Fext_plot,flenz_plot, True)
+
+  filename = os.path.join("results","rotation-squared-wo.csv")
+  SaveResults(filename, tt_wo,ttheta_wo, Fext_plot,flenz_plot, True)
+#+end_src
+
+#+RESULTS:
+
+*** Comparison with experimental data
+:PROPERTIES:
+:CUSTOM_ID: comparison-with-experimental-data
+:END:
+
+For this case, we have experimental data that can be compared with the simulation results to validate the proposed mathematical and numerical model.
+The outcomes of the experimental observations are stored in CSV files generated by the script ~track_plate_falling.py~ (or the notebook ~track_plate_falling.ipynb~) in the folder ~experiment~.
+
+#+begin_src jupyter-python
+  folder = "experiment"
+  experiments = [f"repetition {i}" for i in range(1,6)]
+  n_experiments = len(experiments)
+
+  max_times = 46
+  tt_exp = np.arange(0, max_times)
+  ttheta_exps = np.nan * np.zeros((max_times, n_experiments))
+
+  for i,experiment in enumerate(experiments):
+      address = os.path.join(folder, experiment, "trajectory.csv")
+      data = np.genfromtxt(address, delimiter=",")
+      n_times = data.shape[0]
+      ttheta_exps[:n_times, i] = data[:, 1]
+#+end_src
+
+#+RESULTS:
+
+We can plot the experimental data and the simulation results together to compare them.
+
+#+begin_src jupyter-python
+  #compute mean and standard deviation of experimental data
+  mean_exp = np.mean(ttheta_exps, axis=1)
+  std_exp = np.std(ttheta_exps, axis=1, ddof=1)
+
+  #compute the expanded uncertainty with coverage factor 2
+  unc_exp = 2 * std_exp
+
+  plt.figure()
+
+  #plot the experimental data
+  plt.plot(tt_exp, ttheta_exps[:, :-1], linewidth=0.5, color="gray")
+  plt.plot(tt_exp, ttheta_exps[:, -1], linewidth=0.5, color="gray",
+           label="Individual experiments")
+  plt.errorbar(tt_exp, mean_exp, unc_exp, linewidth=2.0, color="black",
+           label="Experiment", zorder=2)
+
+  #plot the simulation result
+  plt.plot(tt_w, np.rad2deg(ttheta_w[:, 0]), linewidth=2.0, color="red",
+           label="Simulation", zorder=3)
+
+  plt.xlabel("Time (s)")
+  plt.ylabel("Angle (deg)")
+  plt.title("Comparison between experiment and simulation")
+  plt.legend()
+  plt.grid()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/23e9bc73ac64cb26c4f6e218ea7ed98f7cdaaa8c.png]]
+
+*** Squared plate translating in the magnet room
+:PROPERTIES:
+:CUSTOM_ID: squared-plate-translating-in-the-magnet-room
+:END:
+
+Let's run the dynamics solver for a plate translating in the magnet fringe field along the \(z\)-axis towards the scanner bore. The plate is assumed to be pushed with a constant force of 20 N.
+
+In the first considered case, the plate barycenter is in \(x = y = 0\).
+
+#+begin_src jupyter-python
+  # compute the inertia
+  inertia = d*lx*ly*rho
+
+  # read the lenz effect from file
+  filename = os.path.join("em_simulations","plate_translating_isocenter.dat")
+  flenz_plot = ReadLenzEffectFromFile(filename, col=3)
+  flenz = lambda theta: flenz_plot(theta)/inertia
+
+  # forcing term (constant force equivalent to 2 kg)
+  g = 9.81 # [m/s2]
+  Fext = lambda t,theta: 20.0/inertia
+
+  # initial condition
+  z0 = -1.7 # [m]
+
+  # time step and domain boundaries
+  t_max = 60.0 # [s]
+  dt = 0.01 # [s]
+  z_min = -1.71 # [m]
+  z_max = -0.7 # [m]
+
+  # compute the dynamics with and without the magnetic field
+  tt_w,zz_w = ComputeDynamics(Fext, flenz, t_max, dt, z0, z_min, z_max)
+  tt_wo,zz_wo = ComputeDynamics(Fext, lambda y: 0, t_max, dt, z0, z_min, z_max)
+#+end_src
+
+#+RESULTS:
+
+Plot the results.
+
+#+begin_src jupyter-python
+  # plot the result
+  Fext_plot = lambda t,q: Fext(t,q)*inertia
+  fig = PlotResults(tt_w,zz_w, tt_wo,zz_wo, Fext_plot, flenz_plot)
+  fig.suptitle("Squared plate translating (y = 0)")
+  fig.tight_layout()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/a845af211234a96399b6831a9a578e2b7497712e.png]]
+
+Save the results in tables.
+
+#+begin_src jupyter-python
+  filename = os.path.join("results","translation-0-w.csv")
+  SaveResults(filename, tt_w,zz_w, Fext_plot,flenz_plot, False)
+
+  filename = os.path.join("results","translation-0-wo.csv")
+  SaveResults(filename, tt_wo,zz_wo, Fext_plot,flenz_plot, False)
+#+end_src
+
+#+RESULTS:
+
+In the second considered case, the plate barycenter in \(x\) = 0 and \(y\) = 300 mm.
+
+#+begin_src jupyter-python
+  # read the lenz effect from file
+  filename = os.path.join("em_simulations","plate_translating_y300mm.dat")
+  flenz_plot = ReadLenzEffectFromFile(filename, col=3)
+  flenz = lambda theta: flenz_plot(theta)/inertia
+
+  # compute the dynamics with and without the magnetic field
+  tt_w,zz_w = ComputeDynamics(Fext, flenz, t_max, dt, z0, z_min, z_max)
+  tt_wo,zz_wo = ComputeDynamics(Fext, lambda y: 0, t_max, dt, z0, z_min, z_max)
+#+end_src
+
+#+RESULTS:
+
+Plot the results.
+
+#+begin_src jupyter-python
+  # plot the result
+  Fext_plot = lambda t,q: Fext(t,q)*inertia
+  fig = PlotResults(tt_w,zz_w, tt_wo,zz_wo, Fext_plot, flenz_plot)
+  fig.suptitle("Squared plate translating (y = 300 mm)")
+  fig.tight_layout()
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/6f5d4abb763ff3b8c0169b2d417e456cf511877c.png]]
+
+Save the results in tables.
+
+#+begin_src jupyter-python
+  filename = os.path.join("results","translation-300-w.csv")
+  SaveResults(filename, tt_w,zz_w, Fext_plot,flenz_plot, False)
+
+  filename = os.path.join("results","translation-300-wo.csv")
+  SaveResults(filename, tt_wo,zz_wo, Fext_plot,flenz_plot, False)
+#+end_src
+
+#+RESULTS:
