@@ -1,6 +1,6 @@
-# Dynamics of metallic objects in presence of the Lenz effect
+# Dynamics of conductive nonmagnetic objects in presence of the Lenz effect
 
-This repository collects the data and the scripts used to produce the results collected in the paper "Dynamics of metallic objects in presence of the Lenz effect".
+This repository collects the data and the scripts used to produce the results collected in the paper "Dynamics of conductive nonmagnetic objects in presence of the Lenz effect".
 
 ## Overview
 
