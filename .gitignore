@@ -1,6 +1,6 @@
-experiment/repetition*/
+experiment/repetition*/animations/
+experiment/repetition*/motion/
 *.virtual_documents/
 *.ipynb_checkpoints/
 
 *~
-
